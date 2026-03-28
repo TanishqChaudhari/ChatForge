@@ -1,0 +1,418 @@
+╔════════════════════════════════════════════════════════════════════════════════╗
+║                  CONTEXT FOR PHASE 2 - USERS & CONVERSATIONS                   ║
+║                    Complete Implementation Guide & Status                       ║
+╚════════════════════════════════════════════════════════════════════════════════╝
+
+
+📋 QUICK STATUS - PHASE 2
+═══════════════════════════════════════════════════════════════════════════════
+PROJECT NAME: ChatForge - Real-time Chat Application
+PHASE COMPLETED: Phase 1 ✅ | Phase 2 ✅
+CURRENT PHASE: Phase 2 (Complete & Tested)
+STATUS: All 7 endpoints working, automated tests passing (15/15)
+TECH STACK: Node.js, Express, MongoDB, JWT, Mongoose, Socket.io
+
+
+🏗️ PHASE 2 - WHAT'S BEEN IMPLEMENTED
+═══════════════════════════════════════════════════════════════════════════════
+
+USER MANAGEMENT ✅
+├── Get All Users (GET /api/users)
+│   └── Files: src/controllers/userController.js, src/routes/users.js
+│   └── Features: Excludes current user, pagination-ready, auth protected
+│   └── Response: {users: [], count: number, success: boolean}
+│
+├── Search Users (GET /api/users/search?query=username)
+│   └── Files: src/controllers/userController.js, src/routes/users.js
+│   └── Features: Regex search by username or email, case-insensitive
+│   └── Usage: For chat selection UI, find contacts
+│
+└── Current User Info (GET /api/auth/me)
+    └── Already implemented in Phase 1, still available
+
+
+CONVERSATION SYSTEM ✅
+├── Create/Get Conversation (POST /api/conversations)
+│   └── Files: src/controllers/conversationController.js
+│   └── Features: Idempotent (returns same ID if exists), 1-to-1 only
+│   └── Body: {"participantId": "user_id"}
+│   └── Response: {conversation: {_id, participants, createdAt}, success}
+│
+├── Get All Conversations (GET /api/conversations)
+│   └── Files: src/controllers/conversationController.js
+│   └── Features: Lists all conversations for current user
+│   └── Response: {conversations: [], count: number}
+│
+├── Get Single Conversation (GET /api/conversations/:id)
+│   └── Files: src/controllers/conversationController.js
+│   └── Features: Get details of one conversation
+│   └── Permissions: Only participants can access
+│
+├── Get Messages with Pagination (GET /api/conversations/:id/messages?page=1&limit=20)
+│   └── Files: src/controllers/conversationController.js
+│   └── Features: Paginated message retrieval, chronological order
+│   └── Response: {messages: [], count, pagination: {page, pages, limit, total}}
+│
+└── Delete Conversation (DELETE /api/conversations/:id)
+    └── Files: src/controllers/conversationController.js
+    └── Features: Archive/delete conversation for user (soft delete ready)
+    └── Permissions: Only participants can delete
+
+
+NEW DATA MODELS ✅
+├── Conversation Model (src/models/Conversation.js)
+│   ├── Fields:
+│   │   ├── participants: [ObjectId] - array of 2 user IDs for 1-to-1
+│   │   ├── lastMessage: ObjectId - reference to last message (optional)
+│   │   ├── createdAt: Date - auto timestamp
+│   │   └── updatedAt: Date - auto timestamp
+│   ├── Indexes: participants (for fast lookup), createdAt (for sorting)
+│   └── Purpose: Store metadata about conversations
+│
+├── Message Model (src/models/Message.js)
+│   ├── Fields:
+│   │   ├── conversationId: ObjectId - references Conversation
+│   │   ├── senderId: ObjectId - references User who sent
+│   │   ├── content: String - message text
+│   │   ├── status: String enum (sent/delivered/read) - default: sent
+│   │   ├── readAt: Date - when message was read (optional)
+│   │   ├── deliveredAt: Date - when message was delivered (optional)
+│   │   ├── createdAt: Date - auto timestamp
+│   │   └── updatedAt: Date - auto timestamp
+│   ├── Indexes: conversationId, senderId, createdAt (for fast queries)
+│   └── Purpose: Store individual messages in conversations
+│
+└── User Model (Extended from Phase 1)
+    ├── Already has: username, email, password, timestamps
+    └── Ready for: roles, avatar, lastSeen, status fields
+
+
+PROJECT STRUCTURE (PHASE 2 UPDATE)
+═══════════════════════════════════════════════════════════════════════════════
+src/
+├── index.js ................................. Express + Socket.io server
+├── config/
+│   └── database.js .......................... MongoDB connection
+├── models/
+│   ├── User.js .............................. User schema (Phase 1)
+│   ├── Conversation.js ...................... NEW - Conversation metadata
+│   └── Message.js ........................... NEW - Message storage
+├── controllers/
+│   ├── authController.js ................... Auth logic (Phase 1)
+│   ├── userController.js ................... NEW - User management
+│   └── conversationController.js ........... NEW - All conversation CRUD
+├── middleware/
+│   └── auth.js ............................. JWT verification (Phase 1)
+└── routes/
+    ├── auth.js ............................. Auth routes (Phase 1)
+    ├── users.js ............................ NEW - User endpoints
+    └── conversations.js .................... NEW - Conversation endpoints
+
+
+API ENDPOINTS (PHASE 2)
+═══════════════════════════════════════════════════════════════════════════════
+
+USER ENDPOINTS:
+────────────────────────────────────────────────────────────────────────────
+
+1. GET /api/users
+   Purpose: Get all users except current user (for chat selection)
+   Authentication: Required (JWT Bearer token)
+   Query Params: None
+   Response: {
+     "success": true,
+     "count": 2,
+     "users": [
+       {"_id": "...", "username": "bob", "email": "bob@example.com", "createdAt": "..."},
+       {"_id": "...", "username": "charlie", "email": "charlie@example.com", "createdAt": "..."}
+     ]
+   }
+   Status: 200 (success), 400 (validation error), 401 (no token), 500 (server error)
+
+2. GET /api/users/search?query=bob
+   Purpose: Search users by username or email (for contact search)
+   Authentication: Required (JWT Bearer token)
+   Query Params: query (string, min 1 char)
+   Response: {
+     "success": true,
+     "count": 1,
+     "users": [
+       {"_id": "...", "username": "bob", "email": "bob@example.com", "createdAt": "..."}
+     ]
+   }
+   Status: 200 (success), 400 (no query), 401 (no token), 500 (server error)
+
+
+CONVERSATION ENDPOINTS:
+────────────────────────────────────────────────────────────────────────────
+
+1. POST /api/conversations
+   Purpose: Start a new 1-to-1 conversation (or get existing)
+   Authentication: Required
+   Body: {"participantId": "user_id_of_other_person"}
+   Response: {
+     "success": true,
+     "message": "Conversation created or retrieved successfully",
+     "conversation": {
+       "_id": "...",
+       "participants": [
+         {"_id": "...", "username": "alice", "email": "..."},
+         {"_id": "...", "username": "bob", "email": "..."}
+       ],
+       "createdAt": "2026-03-26T...",
+       "updatedAt": "2026-03-26T..."
+     }
+   }
+   Status: 201 (new), 200 (existing), 400 (validation), 401 (no token), 404 (user not found), 500 (error)
+   Note: IDEMPOTENT - calling twice with same participantId returns same conversation
+
+2. GET /api/conversations
+   Purpose: Get all conversations for current user
+   Authentication: Required
+   Query Params: None
+   Response: {
+     "success": true,
+     "count": 2,
+     "conversations": [
+       {
+         "_id": "...",
+         "participants": [...],
+         "lastMessage": {...},
+         "createdAt": "...",
+         "updatedAt": "..."
+       }
+     ]
+   }
+   Status: 200 (success), 401 (no token), 500 (error)
+
+3. GET /api/conversations/:id
+   Purpose: Get details of a specific conversation
+   Authentication: Required
+   Params: id (conversation ObjectId)
+   Response: {
+     "success": true,
+     "conversation": {
+       "_id": "...",
+       "participants": [...],
+       "lastMessage": {...},
+       "createdAt": "...",
+       "updatedAt": "..."
+     }
+   }
+   Status: 200 (success), 401 (no token), 403 (not participant), 404 (not found), 500 (error)
+
+4. GET /api/conversations/:id/messages?page=1&limit=20
+   Purpose: Get messages in a conversation (paginated)
+   Authentication: Required
+   Params: id (conversation ObjectId)
+   Query Params: page (default 1), limit (default 20)
+   Response: {
+     "success": true,
+     "count": 5,
+     "pagination": {
+       "total": 5,
+       "page": 1,
+       "pages": 1,
+       "limit": 20
+     },
+     "messages": [
+       {
+         "_id": "...",
+         "conversationId": "...",
+         "senderId": {"_id": "...", "username": "alice", "email": "..."},
+         "content": "Hey, how are you?",
+         "status": "read",
+         "readAt": "...",
+         "deliveredAt": "...",
+         "createdAt": "..."
+       }
+     ]
+   }
+   Status: 200 (success), 401 (no token), 403 (not participant), 404 (not found), 500 (error)
+
+5. DELETE /api/conversations/:id
+   Purpose: Delete/archive a conversation
+   Authentication: Required
+   Params: id (conversation ObjectId)
+   Response: {
+     "success": true,
+     "message": "Conversation deleted successfully"
+   }
+   Status: 200 (success), 401 (no token), 403 (not participant), 404 (not found), 500 (error)
+
+
+TESTING - AUTOMATED SCRIPT
+═══════════════════════════════════════════════════════════════════════════════
+
+Location: test-phase2.sh
+Purpose: Automated testing of all Phase 2 endpoints
+How to Run: bash test-phase2.sh
+
+Test Coverage (15 tests):
+✓ Server health check
+✓ User registration (3 users)
+✓ Get all users endpoint
+✓ Search users endpoint
+✓ Create conversation (idempotent)
+✓ Get all conversations
+✓ Get single conversation
+✓ Get messages with pagination
+✓ Cross-user permissions (Bob accessing shared conversation)
+✓ Error handling (missing token)
+
+Result: 15/15 PASSING
+
+
+KEY IMPLEMENTATION DETAILS
+═══════════════════════════════════════════════════════════════════════════════
+
+IDEMPOTENCY:
+- POST /api/conversations checks if conversation already exists
+- Query: participants array contains both users in same order
+- Returns existing _id if found, creates new if not
+- Prevents duplicate conversations between same users
+
+PERMISSIONS/AUTHORIZATION:
+- All endpoints require JWT authentication
+- Users can only see their own conversations
+- Users can only access messages if they're participants
+- Message pagination prevents loading entire history at once
+
+PAGINATION:
+- GET /api/conversations/:id/messages?page=1&limit=20
+- Default limit: 20 messages per page
+- Total pages calculated: Math.ceil(totalMessages / limit)
+- Example: 50 messages, limit 20 = 3 pages
+
+USER EXCLUSION:
+- GET /api/users excludes the current user from results
+- Prevents "start conversation with yourself" UX bug
+- Uses MongoDB $ne operator: {_id: {$ne: req.user.id}}
+
+POPULATION/JOINS:
+- Conversation documents populate participant details
+- Messages populate senderId details (username, email)
+- Avoids returning just IDs, provides complete user info
+
+
+DATABASE STRUCTURE
+═══════════════════════════════════════════════════════════════════════════════
+
+Collections Created:
+1. users
+   - Indexed: email (unique), username (unique)
+   - Documents: ~100MB for millions of users
+
+2. conversations
+   - Indexed: participants (for quick 1-to-1 lookups)
+   - Indexed: createdAt (for sorting by newest)
+   - Documents: grows with conversation count
+
+3. messages
+   - Indexed: conversationId (for message retrieval)
+   - Indexed: senderId (for user message history)
+   - Indexed: createdAt (for chronological order)
+   - Documents: grows with message volume (heaviest collection)
+
+
+DEPENDENCY VERSIONS
+═══════════════════════════════════════════════════════════════════════════════
+
+Core Dependencies (Phase 2):
+├── mongoose ^7.5.0 ............... MongoDB ODM - Model definitions
+├── express ^4.18.2 .............. HTTP server framework
+├── jsonwebtoken ^9.0.2 ........... JWT token generation & verification
+├── bcrypt ^6.0.0 ................. Password hashing (fixed from 5.1.1)
+├── cors ^2.8.5 ................... Cross-origin request handling
+├── socket.io ^4.7.1 .............. WebSocket for real-time (ready for Phase 3)
+├── redis ^4.6.10 ................. Cache (installed, not yet used in Phase 2)
+├── kafkajs ^2.2.4 ................ Message queue (installed, not yet used)
+└── dotenv ^16.3.1 ................ Environment variable loading
+
+Dev Dependencies:
+└── nodemon ^3.0.1 ................ Auto-restart on file changes
+
+
+ENVIRONMENT VARIABLES (.env)
+═══════════════════════════════════════════════════════════════════════════════
+
+Required for Phase 2:
+PORT=8000                          # Server port
+NODE_ENV=development               # dev or production
+MONGODB_URI=mongodb://localhost:27017/chatforge  # MongoDB connection
+JWT_SECRET=your_super_secret_key   # JWT signing key (change in production!)
+JWT_EXPIRE=7d                      # Token expiration (7 days)
+CORS_ORIGIN=http://localhost:3000  # Frontend origin
+
+Optional (for Phase 3+):
+REDIS_HOST=localhost               # Redis cache
+REDIS_PORT=6379
+KAFKA_BROKERS=localhost:9092       # Kafka message queue
+KAFKA_CLIENT_ID=chatforge-client
+
+
+NEXT STEPS - PHASE 3 ROADMAP
+═══════════════════════════════════════════════════════════════════════════════
+
+✨ PHASE 3: Real-time Messaging
+├── New Model: Message (already created in Phase 2)
+├── New Endpoints:
+│   ├── POST /api/messages (send message)
+│   ├── PATCH /api/messages/:id/read (mark as read)
+│   └── PATCH /api/messages/:id/status (update status)
+├── Socket.io Events:
+│   ├── message_send → receive message instantly
+│   ├── message_read_receipt → update read status
+│   └── typing_indicator → show "user is typing..."
+└── Key Files: src/controllers/messageController.js, updated src/index.js
+
+✨ PHASE 4: User Presence & Online Status
+├── Redis Integration: Track connected users
+├── Socket.io Events:
+│   ├── user_online → broadcast when user connects
+│   ├── user_offline → broadcast when user disconnects
+│   └── user_status → last seen, away, busy
+└── Endpoint: GET /api/users/online (fetch online users)
+
+✨ PHASE 5: Kafka Integration (Message Queue)
+├── Producer: Emit Kafka events on message creation
+├── Topics: messages.created, messages.read, users.online
+├── Consumer: Process events for notifications, logging, analytics
+└── Benefits: Decoupled architecture, scalable message processing
+
+✨ PHASE 6: Testing & Quality
+├── Jest unit tests for models
+├── Supertest API integration tests
+├── Automated test suite → CI/CD ready
+└── Coverage target: 80%+
+
+✨ PHASE 7: Deployment & Scaling
+├── Docker containerization
+├── AWS EC2 setup
+├── Environment configuration
+├── Load testing & optimization
+└── Production checklist
+
+
+TROUBLESHOOTING
+═══════════════════════════════════════════════════════════════════════════════
+
+Issue: "E11000 duplicate key error"
+→ User already exists with same email or username
+→ Solution: Use unique timestamps in test script, MongoDB drops on test run
+
+Issue: "Invalid token"
+→ JWT token expired or malformed
+→ Solution: Re-login to get new token, verify Bearer format
+
+Issue: "Conversation not found"
+→ User not a participant or conversation deleted
+→ Solution: Verify conversation ID, ensure user is a participant
+
+Issue: "Cannot create conversation with yourself"
+→ Trying to start conversation with own user ID
+→ Solution: Select different user from user list
+
+Issue: Messages endpoint returns empty
+→ No messages sent yet (expected behavior)
+→ Status will be 200 with count: 0, pagination.total: 0

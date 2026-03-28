@@ -1,0 +1,515 @@
+╔════════════════════════════════════════════════════════════════════════════════╗
+║                PHASE 4: REDIS PRESENCE + KAFKA EVENT STREAMING                 ║
+║                       Advanced Infrastructure Integration                       ║
+╚════════════════════════════════════════════════════════════════════════════════╝
+
+
+🎯 WHAT'S NEW IN PHASE 4
+═══════════════════════════════════════════════════════════════════════════════
+
+REDIS: User Presence Tracking
+├── When user connects Socket.io → SET user:{userId}:online true EX 300
+├── When user disconnects → DEL user:{userId}:online
+└── New endpoint: GET /api/users/online to list all online users
+
+KAFKA: Event Streaming
+├── When message is sent (REST or Socket.io) → Produce to 'messages' topic
+├── Consumer logs all message events
+└── Ready for integration with analytics, notifications, other services
+
+
+📦 DEPENDENCIES INSTALLED
+═══════════════════════════════════════════════════════════════════════════════
+
+ioredis ^5.3.x       ← Redis client for Node.js
+kafkajs ^2.2.x       ← Apache Kafka client
+
+
+📁 FILES CREATED
+═══════════════════════════════════════════════════════════════════════════════
+
+src/redis/client.js (30 lines)
+├── Redis connection initialization
+├── Retry strategy for reconnection
+├── Connection event handlers
+└── Exports: redis client instance
+
+src/kafka/producer.js (75 lines)
+├── Kafka producer initialization
+├── produceMessageEvent() function
+│   └── Sends message data to 'messages' topic
+├── Auto-connect on first use
+└── Error handling for non-blocking failures
+
+src/kafka/consumer.js (85 lines)
+├── Kafka consumer initialization
+├── subscribeToMessages() function
+│   └── Consumes events from 'messages' topic
+├── Processes and logs each message event
+└── Ready for implementing business logic
+
+test-phase4.sh (250 lines)
+└── Tests Redis presence, Kafka, and new endpoints
+
+
+📝 FILES MODIFIED
+═══════════════════════════════════════════════════════════════════════════════
+
+src/socket/index.js
+├── Added: import redis client
+├── Added: import Kafka producer
+├── Connection handler: SET Redis key with 300s expiration
+├── Send message: Call produceMessageEvent()
+└── Disconnect: DEL Redis key
+
+src/controllers/messageController.js
+├── Added: import Kafka producer
+├── sendMessage(): Call produceMessageEvent() after save
+└── Non-blocking: Kafka errors don't fail REST request
+
+src/routes/users.js
+├── GET /api/users/online
+│   └── Returns all currently online users from Redis
+└── GET /api/users/:userId/online-status
+    └── Check if specific user is online
+
+
+⚙️ HOW TO SET UP
+═══════════════════════════════════════════════════════════════════════════════
+
+STEP 1: Install Redis (Option A: Docker)
+  docker run -d -p 6379:6379 redis:latest
+  
+  Or Option B: Local (macOS)
+  brew install redis
+  redis-server
+
+STEP 2: Install Kafka (Option A: Docker Compose)
+  Create docker-compose.yml:
+  ```yaml
+  version: '3'
+  services:
+    zookeeper:
+      image: confluentinc/cp-zookeeper:latest
+      environment:
+        ZOOKEEPER_CLIENT_PORT: 2181
+    
+    kafka:
+      image: confluentinc/cp-kafka:latest
+      ports:
+        - "9092:9092"
+      environment:
+        KAFKA_BROKER_ID: 1
+        KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+        KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+        KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+  ```
+  
+  Then run: docker-compose up -d
+
+  Or Option B: Local (macOS)
+  brew install kafka
+  zookeeper-server-start /usr/local/etc/kafka/zookeeper.properties
+  kafka-server-start /usr/local/etc/kafka/server.properties
+
+STEP 3: Environment Variables (add to .env)
+  REDIS_HOST=localhost
+  REDIS_PORT=6379
+  KAFKA_BROKERS=localhost:9092
+
+STEP 4: Start ChatForge
+  npm run dev
+
+
+📡 REDIS PRESENCE TRACKING FLOW
+═══════════════════════════════════════════════════════════════════════════════
+
+USER CONNECTS:
+  1. Client connects to Socket.io with JWT token
+     ↓
+  2. Server middleware verifies token
+     ↓
+  3. Connection handler executes:
+     - activeUsers[userId] = socketId (in-memory)
+     - redis.setex(`user:${userId}:online`, 300, 'true')
+     ↓
+  4. User appears in Redis for 5 minutes
+  5. Redis key auto-expires if user doesn't ping
+
+TIMEOUT BEHAVIOR:
+  - Each connection keeps key alive for 300 seconds (5 minutes)
+  - If Socket.io pings (keep-alive), key extends
+  - If user closes app without proper disconnect: Key expires after 5 min
+  - If proper disconnect: Key deleted immediately
+
+USER DISCONNECTS:
+  1. Socket.on('disconnect') handler executes:
+     - delete activeUsers[userId]
+     - await redis.del(`user:${userId}:online`)
+     ↓
+  2. User immediately removed from online list
+  3. broadcast user_offline event sent
+
+
+📊 KAFKA EVENT STREAMING FLOW
+═══════════════════════════════════════════════════════════════════════════════
+
+MESSAGE SENT (via REST API):
+  1. POST /api/messages received
+  2. Message saved to MongoDB
+  3. produceMessageEvent(message) called
+  4. Kafka producer connects (if not already)
+  5. Message event sent to 'messages' topic:
+     ```
+     {
+       messageId: "...",
+       conversationId: "...",
+       senderId: "...",
+       content: "...",
+       status: "sent",
+       timestamp: "2026-03-27T..."
+     }
+     ```
+  6. REST response sent (Kafka async, non-blocking)
+  7. Consumer logs the event
+
+MESSAGE SENT (via Socket.io):
+  1. socket.emit('send_message') received
+  2. Message saved to MongoDB
+  3. Same produceMessageEvent() called
+  4. Kafka event produced
+  5. message_sent and message_received events emitted
+  6. Consumer logs the event
+
+
+📡 NEW API ENDPOINTS
+═══════════════════════════════════════════════════════════════════════════════
+
+GET /api/users/online (Auth Required)
+
+Purpose: List all currently online users
+Response:
+  {
+    "success": true,
+    "users": [
+      {
+        "id": "user_id_1",
+        "username": "alice",
+        "email": "alice@test.com",
+        "lastSeen": "2026-03-27T10:30:00Z"
+      },
+      {
+        "id": "user_id_2",
+        "username": "bob",
+        "email": "bob@test.com",
+        "lastSeen": "2026-03-27T10:35:00Z"
+      }
+    ],
+    "count": 2
+  }
+
+Example:
+  curl -X GET http://localhost:8000/api/users/online \
+    -H "Authorization: Bearer eyJhbGc..."
+
+
+GET /api/users/:userId/online-status (Auth Required)
+
+Purpose: Check if specific user is online
+Response:
+  {
+    "success": true,
+    "userId": "user_id_123",
+    "isOnline": true
+  }
+
+Example:
+  curl -X GET http://localhost:8000/api/users/user_id_123/online-status \
+    -H "Authorization: Bearer eyJhbGc..."
+
+
+🔄 INTEGRATION EXAMPLES
+═══════════════════════════════════════════════════════════════════════════════
+
+Example 1: Show Online Status in UI
+  ```javascript
+  // Get all online users
+  async function getOnlineUsers() {
+    const response = await fetch('/api/users/online', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    const data = await response.json();
+    return data.users; // [{id, username, isOnline}, ...]
+  }
+  
+  // Mark online users with green dot
+  const onlineUsers = await getOnlineUsers();
+  const onlineIds = new Set(onlineUsers.map(u => u.id));
+  
+  userList.forEach(user => {
+    if (onlineIds.has(user.id)) {
+      user.element.classList.add('online'); // Show green dot
+    }
+  });
+  ```
+
+Example 2: Listen for Online Status Changes
+  ```javascript
+  // Keep track of who's online via Socket.io
+  socket.on('user_online', (data) => {
+    console.log(`${data.userId} came online`);
+    updateUI(data.userId, 'online');
+  });
+  
+  socket.on('user_offline', (data) => {
+    console.log(`${data.userId} went offline`);
+    updateUI(data.userId, 'offline');
+  });
+  ```
+
+Example 3: Consume Kafka Events (External Service)
+  ```javascript
+  // In a separate Node.js service:
+  const { Consumer } = require('kafkajs');
+  
+  async function analyzeMessages() {
+    const consumer = kafka.consumer({ groupId: 'analytics' });
+    await consumer.connect();
+    await consumer.subscribe({ topic: 'messages' });
+    
+    await consumer.run({
+      eachMessage: async ({ message }) => {
+        const event = JSON.parse(message.value);
+        
+        // Log to analytics database
+        await analytics.logMessage({
+          messageId: event.messageId,
+          userId: event.senderId,
+          timestamp: event.timestamp
+        });
+      }
+    });
+  }
+  ```
+
+
+🧪 TESTING PHASE 4
+═══════════════════════════════════════════════════════════════════════════════
+
+Prerequisites:
+  ✓ Redis running (docker or local)
+  ✓ Kafka running (docker or local)
+  ✓ MongoDB running
+  ✓ Node.js server running
+
+Run Test Script:
+  bash test-phase4.sh
+
+What it tests:
+  1. User registration and login
+  2. GET /api/users/online endpoint (empty initially)
+  3. Send message via REST (triggers Kafka)
+  4. Retrieve message
+  5. GET /api/users/online with Redis
+  6. Individual user online status check
+
+Expected Output:
+  ✓ Alice registered
+  ✓ Bob registered
+  ✓ Alice logged in
+  ✓ Bob logged in
+  ✓ Conversation created
+  ✓ No users online initially
+  ✓ Message sent (Kafka event produced)
+  ✓ Message retrieved
+  ✓ GET /api/users/online endpoint working
+  ✓ User online status endpoint working
+
+
+🚀 KAFKA CONSUMER USAGE
+═══════════════════════════════════════════════════════════════════════════════
+
+Start Consumer in Separate Terminal:
+  
+  Create consumer.js:
+  ```javascript
+  const { subscribeToMessages } = require('./src/kafka/consumer');
+  
+  subscribeToMessages().then(() => {
+    console.log('Consumer started, listening for messages...');
+  });
+  ```
+  
+  Run:
+  node consumer.js
+
+Output:
+  ✓ Kafka consumer connected
+  [Kafka Consumer] Message event received: {
+    messageId: '...',
+    conversationId: '...',
+    senderId: '...',
+    content: 'Test message',
+    status: 'sent',
+    timestamp: '2026-03-27T10:30:00Z'
+  }
+
+
+⚠️ KNOWN LIMITATIONS
+═══════════════════════════════════════════════════════════════════════════════
+
+Redis Presence Expiry:
+  ⚠️ Keys expire after 300 seconds (5 minutes) if not refreshed
+  - Solution: Implement heartbeat/ping system to extend expiry
+  - Or increase expiry time based on your use case
+
+Kafka Consumer Offset:
+  ⚠️ Consumer starts from latest messages only (fromBeginning: false)
+  - Historical messages won't be consumed
+  - Solution: Set fromBeginning: true in consumer.js if needed
+
+Kafka Single Broker:
+  ⚠️ Single broker setup not recommended for production
+  - Solution: Use multi-node Kafka cluster for HA
+
+Redis Persistence:
+  ⚠️ In-memory Redis data lost on restart
+  - Solution: Enable RDB or AOF persistence in Redis config
+
+
+📚 ARCHITECTURE DIAGRAM
+═══════════════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────┐
+│                          Frontend (React/Vue)                   │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Socket.io Connection                  REST API Calls          │
+│        │                                      │                │
+│        └──────────────────┬────────────────────┘               │
+│                           ↓                                    │
+├─────────────────────────────────────────────────────────────────┤
+│                    Express Server :8000                         │
+│                                                                 │
+│  Socket Handler          Message Controller                    │
+│  ├─ connect             ├─ sendMessage                         │
+│  ├─ send_message        ├─ markMessageAsRead                  │
+│  ├─ typing_start        ├─ getMessages                        │
+│  ├─ message_read        └─ updateMessageStatus               │
+│  └─ disconnect                                                 │
+│        │                      │                                │
+│        ├─→ Redis Client       ├─→ Kafka Producer              │
+│        │   (Presence)         │   (Message Events)            │
+│        │   SET/DEL            │   Produces to 'messages'      │
+│        │                      │   topic                       │
+│        └──────────┬───────────┘                               │
+│                   ↓                                            │
+├─────────────────────────────────────────────────────────────────┤
+│                    MongoDB Database                             │
+│                  (Messages, Conversations, Users)              │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Redis (:6379)              Kafka (:9092)                     │
+│  ├─ user:*:online           ├─ Topic: messages               │
+│  ├─ Active connections      ├─ Consumer group                │
+│  └─ 300s expiry             └─ Event logging                 │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+
+
+📋 NEXT STEPS - PHASE 5 ROADMAP
+═══════════════════════════════════════════════════════════════════════════════
+
+✨ PHASE 5: PRODUCTION FEATURES
+├── [ ] Notifications system (Email/Push)
+│   └── Consume Kafka events → trigger notifications
+├── [ ] Message search and filtering
+├── [ ] Group conversations
+├── [ ] Media/file sharing
+├── [ ] Message reactions (emoji)
+└── [ ] Message editing/deletion
+
+✨ PHASE 6: SCALING & DEPLOYMENT
+├── [ ] Load balancing with sticky sessions
+├── [ ] Redis Pub/Sub for multi-server Socket.io
+├── [ ] Database connection pooling
+├── [ ] Docker containerization
+├── [ ] Kubernetes deployment
+└── [ ] Monitoring & observability
+
+
+🔧 ENVIRONMENT SETUP CHECKLIST
+═══════════════════════════════════════════════════════════════════════════════
+
+Required Services:
+  ☐ MongoDB (local or Atlas)
+  ☐ Redis (localhost:6379 or cloud)
+  ☐ Kafka (localhost:9092 or cloud)
+  ☐ Node.js 14+ (npm packages installed)
+
+Environment Variables (.env):
+  ☐ JWT_SECRET=your_jwt_secret
+  ☐ MONGODB_URI=mongodb+srv://...
+  ☐ REDIS_HOST=localhost
+  ☐ REDIS_PORT=6379
+  ☐ KAFKA_BROKERS=localhost:9092
+  ☐ NODE_ENV=development|production
+  ☐ PORT=8000
+
+NPM Packages:
+  ☐ express ^4.18.2
+  ☐ mongoose ^7.5.0
+  ☐ socket.io ^4.7.1
+  ☐ jsonwebtoken ^9.0.2
+  ☐ ioredis ^5.3.x
+  ☐ kafkajs ^2.2.x
+  ☐ dotenv (for env vars)
+
+Commands to Start Everything:
+  Terminal 1: redis-server
+  Terminal 2: kafka-server-start /path/to/server.properties
+  Terminal 3: npm run dev (ChatForge)
+  Terminal 4: node consumer.js (Kafka consumer)
+
+
+📊 MONITORING REDIS & KAFKA
+═══════════════════════════════════════════════════════════════════════════════
+
+Redis Monitoring:
+  # Check Redis keys
+  redis-cli KEYS "user:*:online"
+  
+  # Get specific user status
+  redis-cli GET "user:alice_id:online"
+  
+  # Monitor in real-time
+  redis-cli MONITOR
+  
+  # Check Redis info
+  redis-cli INFO
+
+Kafka Monitoring:
+  # List topics
+  kafka-topics --list --bootstrap-server localhost:9092
+  
+  # Describe topic
+  kafka-topics --describe --topic messages --bootstrap-server localhost:9092
+  
+  # Monitor topic in real-time
+  kafka-console-consumer --topic messages --bootstrap-server localhost:9092 --from-beginning
+  
+  # Check consumer group
+  kafka-consumer-groups --list --bootstrap-server localhost:9092
+
+
+🎉 PHASE 4 COMPLETE!
+═══════════════════════════════════════════════════════════════════════════════
+
+✓ Redis presence tracking configured
+✓ Kafka event streaming ready
+✓ Online users API endpoints created
+✓ Message events published to Kafka
+✓ Test suite prepared
+✓ Documentation complete
+
+Next: Set up Redis & Kafka infrastructure, then test Phase 4!
