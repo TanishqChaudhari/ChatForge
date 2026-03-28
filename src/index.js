@@ -8,6 +8,9 @@ const connectDB = require('./config/database');
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const conversationRoutes = require('./routes/conversations');
+const messageRoutes = require('./routes/messages');
+const initializeSocket = require('./socket');
+const { subscribeToMessages } = require('./kafka/consumer');
 
 // Initialize Express app
 const app = express();
@@ -21,6 +24,11 @@ const io = socketIo(server, {
 
 // Connect to MongoDB
 connectDB();
+
+// Initialize Kafka consumer
+subscribeToMessages().catch(err => {
+  console.error('⚠ Kafka consumer initialization failed (non-blocking):', err.message);
+});
 
 // Middleware
 app.use(express.json());
@@ -41,6 +49,7 @@ app.get('/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/conversations', conversationRoutes);
+app.use('/api/messages', messageRoutes);
 
 // 404 handler
 app.use((req, res) => {
@@ -59,25 +68,8 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Socket.io connection handling
-io.on('connection', (socket) => {
-  console.log(`✓ User connected: ${socket.id}`);
-
-  socket.on('disconnect', () => {
-    console.log(`✗ User disconnected: ${socket.id}`);
-  });
-
-  // Add more socket events as needed
-  socket.on('join_room', (room) => {
-    socket.join(room);
-    console.log(`User ${socket.id} joined room: ${room}`);
-  });
-
-  socket.on('leave_room', (room) => {
-    socket.leave(room);
-    console.log(`User ${socket.id} left room: ${room}`);
-  });
-});
+// Socket.io initialization with JWT authentication and real-time messaging
+initializeSocket(io);
 
 // Start server
 const PORT = process.env.PORT || 5000;
