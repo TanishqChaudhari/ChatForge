@@ -52,6 +52,45 @@ wait_for_service() {
   return 1
 }
 
+find_kafka_executable() {
+  local base_name=$1
+  local candidates=(
+    "$KAFKA_HOME/bin/$base_name"
+    "$KAFKA_HOME/bin/${base_name}.sh"
+    "$KAFKA_HOME/libexec/bin/$base_name"
+    "$KAFKA_HOME/libexec/bin/${base_name}.sh"
+  )
+
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if [ -x "$candidate" ]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+
+  if command -v "$base_name" &> /dev/null; then
+    command -v "$base_name"
+    return 0
+  fi
+
+  if command -v "${base_name}.sh" &> /dev/null; then
+    command -v "${base_name}.sh"
+    return 0
+  fi
+
+  return 1
+}
+
+start_kafka_with_brew() {
+  if brew services start kafka &> /dev/null; then
+    echo -e "  ${GREEN}✓${NC} Kafka service started via Homebrew"
+    return 0
+  fi
+
+  return 1
+}
+
 # ============================================================================
 # 1. Check Prerequisites
 # ============================================================================
@@ -102,6 +141,24 @@ if [ ! -d "$KAFKA_HOME" ]; then
   exit 1
 fi
 
+# Resolve Kafka command paths for both legacy and newer Homebrew layouts
+KAFKA_SERVER_START_BIN=$(find_kafka_executable "kafka-server-start" || true)
+KAFKA_TOPICS_BIN=$(find_kafka_executable "kafka-topics" || true)
+ZOOKEEPER_START_BIN=$(find_kafka_executable "zookeeper-server-start" || true)
+
+if [ -f "$KAFKA_HOME/config/server.properties" ]; then
+  KAFKA_SERVER_CONFIG="$KAFKA_HOME/config/server.properties"
+elif [ -f "$KAFKA_HOME/config/kraft/server.properties" ]; then
+  KAFKA_SERVER_CONFIG="$KAFKA_HOME/config/kraft/server.properties"
+else
+  KAFKA_SERVER_CONFIG=""
+fi
+
+ZOOKEEPER_ENABLED=false
+if [ -n "$ZOOKEEPER_START_BIN" ] && [ -f "$KAFKA_HOME/config/zookeeper.properties" ]; then
+  ZOOKEEPER_ENABLED=true
+fi
+
 echo -e "${GREEN}✓${NC} Kafka found at: $KAFKA_HOME"
 echo ""
 
@@ -130,26 +187,29 @@ fi
 echo ""
 
 # ============================================================================
-# 5. Start Kafka Zookeeper
+# 5. Start Kafka Zookeeper (legacy mode only)
 # ============================================================================
-echo "5️⃣  Starting Kafka Zookeeper..."
+echo "5️⃣  Starting Kafka Zookeeper (legacy mode only)..."
 echo ""
 
-# Check if Zookeeper is already running
-if nc -z localhost 2181 &> /dev/null; then
-  echo -e "${GREEN}✓${NC} Zookeeper already running"
+if [ "$ZOOKEEPER_ENABLED" != "true" ]; then
+  echo -e "${BLUE}  Zookeeper startup skipped (Kafka KRaft mode detected).${NC}"
 else
-  echo "  Starting Zookeeper..."
-  
-  # Start Zookeeper in background
-  $KAFKA_HOME/bin/zookeeper-server-start.sh -daemon $KAFKA_HOME/config/zookeeper.properties
-  
-  # Wait for Zookeeper to start
-  sleep 3
+  # Check if Zookeeper is already running
   if nc -z localhost 2181 &> /dev/null; then
-    echo -e "${GREEN}✓${NC} Zookeeper started (port 2181)"
+    echo -e "${GREEN}✓${NC} Zookeeper already running"
   else
-    echo -e "${YELLOW}⚠${NC} Zookeeper may still be starting..."
+    echo "  Starting Zookeeper..."
+
+    "$ZOOKEEPER_START_BIN" -daemon "$KAFKA_HOME/config/zookeeper.properties"
+
+    # Wait for Zookeeper to start
+    sleep 3
+    if nc -z localhost 2181 &> /dev/null; then
+      echo -e "${GREEN}✓${NC} Zookeeper started (port 2181)"
+    else
+      echo -e "${YELLOW}⚠${NC} Zookeeper may still be starting..."
+    fi
   fi
 fi
 
@@ -166,9 +226,15 @@ if nc -z localhost 9092 &> /dev/null; then
   echo -e "${GREEN}✓${NC} Kafka broker already running"
 else
   echo "  Starting Kafka broker..."
-  
-  # Start Kafka broker in background
-  $KAFKA_HOME/bin/kafka-server-start.sh -daemon $KAFKA_HOME/config/server.properties
+
+  if start_kafka_with_brew; then
+    :
+  elif [ -n "$KAFKA_SERVER_START_BIN" ] && [ -n "$KAFKA_SERVER_CONFIG" ]; then
+    "$KAFKA_SERVER_START_BIN" -daemon "$KAFKA_SERVER_CONFIG"
+  else
+    echo -e "${RED}✗${NC} Unable to find a valid Kafka start command/config"
+    exit 1
+  fi
   
   # Wait for Kafka to start
   sleep 5
@@ -195,10 +261,14 @@ else
 fi
 
 # Zookeeper check
-if nc -z localhost 2181 &> /dev/null; then
-  echo -e "${GREEN}✓${NC} Zookeeper: RUNNING (port 2181)"
+if [ "$ZOOKEEPER_ENABLED" = "true" ]; then
+  if nc -z localhost 2181 &> /dev/null; then
+    echo -e "${GREEN}✓${NC} Zookeeper: RUNNING (port 2181)"
+  else
+    echo -e "${YELLOW}⚠${NC} Zookeeper: NOT RESPONDING (may still be starting)"
+  fi
 else
-  echo -e "${YELLOW}⚠${NC} Zookeeper: NOT RESPONDING (may still be starting)"
+  echo -e "${BLUE}ℹ${NC} Zookeeper: SKIPPED (KRaft mode)"
 fi
 
 # Kafka check
@@ -219,12 +289,17 @@ echo ""
 # Wait a bit more for Kafka to fully initialize
 sleep 2
 
+if [ -z "$KAFKA_TOPICS_BIN" ]; then
+  echo -e "${RED}✗${NC} kafka-topics command not found"
+  exit 1
+fi
+
 # Create 'messages' topic if it doesn't exist
-if $KAFKA_HOME/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list 2>/dev/null | grep -q "^messages\$"; then
+if "$KAFKA_TOPICS_BIN" --bootstrap-server localhost:9092 --list 2>/dev/null | grep -q "^messages\$"; then
   echo -e "${GREEN}✓${NC} Topic 'messages' already exists"
 else
   echo "  Creating 'messages' topic..."
-  $KAFKA_HOME/bin/kafka-topics.sh \
+  "$KAFKA_TOPICS_BIN" \
     --bootstrap-server localhost:9092 \
     --create \
     --topic messages \
@@ -244,7 +319,11 @@ echo "=========================================="
 echo ""
 echo "Services are now running:"
 echo "  • Redis: localhost:6379"
-echo "  • Zookeeper: localhost:2181"
+if [ "$ZOOKEEPER_ENABLED" = "true" ]; then
+  echo "  • Zookeeper: localhost:2181"
+else
+  echo "  • Zookeeper: not required (Kafka KRaft mode)"
+fi
 echo "  • Kafka: localhost:9092"
 echo ""
 echo "📝 Next Steps:"

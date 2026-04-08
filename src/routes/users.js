@@ -1,5 +1,5 @@
 const express = require('express');
-const { getAllUsers, searchUsers } = require('../controllers/userController');
+const { getCurrentUser, getAllUsers, searchUsers } = require('../controllers/userController');
 const authMiddleware = require('../middleware/auth');
 const redis = require('../redis/client');
 const User = require('../models/User');
@@ -8,6 +8,9 @@ const router = express.Router();
 
 // All user routes are protected
 router.use(authMiddleware);
+
+// Get current user profile
+router.get('/me', getCurrentUser);
 
 // Get all users
 router.get('/', getAllUsers);

@@ -1,5 +1,32 @@
 const User = require('../models/User');
 
+// @desc    Get current user profile
+// @route   GET /api/users/me
+// @access  Private
+exports.getCurrentUser = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select('_id username email createdAt updatedAt');
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      user,
+    });
+  } catch (error) {
+    console.error('Get current user error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to fetch current user',
+    });
+  }
+};
+
 // @desc    Get all users except current user
 // @route   GET /api/users
 // @access  Private
